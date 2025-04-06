@@ -1,4 +1,5 @@
 const { chromium } = require('playwright');
+const fs = require('fs');
 
 // Helper function: Extract all article timestamps from the page
 async function extractTimestamps(page) {
@@ -17,44 +18,62 @@ function isSortedNewestToOldest(timestamps) {
   }
   return true;
 }
-
-(async () => {
-  // Arrange: Launch browser and new page, then navigate to the target URL
-  const browser = await chromium.launch();
-  const page = await browser.newPage();
-  await page.goto('https://news.ycombinator.com/newest');
-  let allTimestamps = [];
-
-  // Act: Click the "more" link repeatedly until at least 100 timestamps are collected
-  while (allTimestamps.length < 100) {
-    const timestamps = await extractTimestamps(page);
-    allTimestamps.push(...timestamps);
-
-    // If less than 100 timestamps are collected, click the "more" link to load more articles
-    if (allTimestamps.length < 100) {
-      const moreLink = page.locator('a.morelink');
-      await Promise.all([
-        page.waitForLoadState('load'), // Wait for the page to load
-        moreLink.click()                 // Click on the "more" link
-      ]);
+async function sortHackerNewsArticles(desiredCount = 100, timeoutMs = 60000) {
+    // -----------------------------------------Arrange-----------------------------------------
+    // Check if input is a valid positive integer
+    desiredCount = parseInt(desiredCount, 10);
+    if (isNaN(desiredCount) || desiredCount <= 0) {
+      console.log('❌ Please provide a valid number (e.g., `node script.js 150`)');
+      process.exit(1);
+    }
+  
+    const browser = await chromium.launch();
+    const page = await browser.newPage();
+    await page.goto('https://news.ycombinator.com/newest');
+    let allTimestamps = [];
+    const startTime = Date.now();
+  
+    try {
+      // -----------------------------------------Act-----------------------------------------
+      while (allTimestamps.length < desiredCount) {
+        const timestamps = await extractTimestamps(page);
+        allTimestamps.push(...timestamps);
+  
+        if (allTimestamps.length >= desiredCount) break;
+  
+        if (Date.now() - startTime > timeoutMs) {
+          throw new Error(`Timeout: Couldn't collect ${desiredCount} timestamps within ${timeoutMs / 1000}s.`);
+        }
+  
+        const moreLink = page.locator('a.morelink');
+        await Promise.all([
+          page.waitForLoadState('load'),
+          moreLink.click()
+        ]);
+      }
+  
+      const selected = allTimestamps.slice(0, desiredCount);
+      fs.writeFileSync('timestamps.json', JSON.stringify(selected, null, 2));
+  
+      // -----------------------------------------Assert-----------------------------------------
+      console.log(`✅ Collected ${selected.length} timestamps.`);
+      console.log('📝 Saved to timestamps.json');
+  
+      if (isSortedNewestToOldest(selected)) {
+        console.log(`✅ Sorted correctly (newest to oldest).`);
+      } else {
+        console.log(`❌ Not sorted correctly.`);
+      }
+  
+    } catch (error) {
+      console.error(`❌ Error: ${error.message}`);
+    } finally {
+      await browser.close();
     }
   }
+  
 
-  const first100 = allTimestamps.slice(0, 100);
-  console.log(first100);
-  console.log(`Number of collected timestamps: ${first100.length}`);
-
-  // Assert: Verify that exactly 100 timestamps are collected and they are sorted correctly
-  if (first100.length !== 100) {
-    console.log(`❌ Only collected ${first100.length} timestamps.`);
-    process.exit(1);
-  }
-  if (isSortedNewestToOldest(first100)) {
-    console.log('✅ Successfully verified: 100 articles are sorted from newest to oldest.');
-  } else {
-    console.log('❌ The articles are NOT sorted from newest to oldest.');
-  }
-
-  // Cleanup: Close the browser
-  await browser.close();
-})();
+  (async () => {
+    await sortHackerNewsArticles(process.argv[2]); //Allow user passing parameters to set their own amounts of articles
+  })();
+  
